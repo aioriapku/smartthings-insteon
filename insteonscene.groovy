@@ -1,4 +1,4 @@
-/*
+/**
  *  Insteon Dimmer Switch
  *  Original Author     : ethomasii@gmail.com
  *  Creation Date       : 2013-12-08
@@ -25,20 +25,16 @@
 import groovy.json.JsonSlurper
 
 preferences {
-    input("deviceid", "text", title: "Device ID", description: "Your Insteon device.  Do not include periods example: FF1122.")
+    input("group", "text", title: "Group number", description: "Scene group number from the Insteon app")
     input("host", "text", title: "URL", description: "The URL of your Hub (without http:// example: my.hub.com ")
     input("port", "text", title: "Port", description: "The hub port.")
     input("username", "text", title: "Username", description: "The hub username (found in app)")
     input("password", "text", title: "Password", description: "The hub password (found in app)")
-    input("poll_frequency", "number", title: "Poll frequency", description: "Device status polling in minutes (0 to disable)", defaultValue: 3)
 }
 
 metadata {
-    definition (name: "Insteon Dimmer Switch or Plug", author: "kuestess", oauth: true) {
-        capability "Switch Level"
-        capability "Polling"
+    definition (name: "Insteon Local Scene", author: "kuestess", oauth: true) {
         capability "Switch"
-        capability "Refresh"
     }
 
     // simulator metadata
@@ -74,16 +70,20 @@ metadata {
     }
 }
 
+// Not in use
+def parse(String description) {
+}
+
 def on() {
-    log.debug "Turning device ON"
-    sendCmd("11", "FF")
+    log.debug "Turning scene ON"
+    sendCmd("11", "$settings.group")
     sendEvent(name: "switch", value: "on");
     sendEvent(name: "level", value: 100, unit: "%")
 }
 
 def off() {
-    log.debug "Turning device OFF"
-    sendCmd("13", "00")
+    log.debug "Turning scene OFF"
+    sendCmd("13", "$settings.group")
     sendEvent(name: "switch", value: "off");
     sendEvent(name: "level", value: 0, unit: "%")
 }
@@ -114,14 +114,14 @@ def dim(level, real) {
     sendEvent(name: "level", value: real, unit: "%")
 }
 
-def sendCmd(num, level)
+def sendCmd(num, group)
 {
     log.debug "Sending Command"
 
     def userpasstext = "$settings.username:$settings.password"
     def userpass = userpasstext.encodeAsBase64().toString()
 
-    sendHubCommand(new physicalgraph.device.HubAction("""GET 3?0262${settings.deviceid}0F${num}${level}=I=3 HTTP/1.1\r\nHOST: ${settings.host}:${settings.port}\r\nAuthorization: Basic ${userpass}\r\n\r\n""", physicalgraph.device.Protocol.LAN, "${deviceNetworkId}"))
+    sendHubCommand(new physicalgraph.device.HubAction("""GET /0?${num}${group}=I=0 HTTP/1.1\r\nHOST: ${settings.host}:${settings.port}\r\nAuthorization: Basic ${userpass}\r\n\r\n""", physicalgraph.device.Protocol.LAN, "${deviceNetworkId}"))
 
     log.debug "Command Completed"
 }
@@ -129,97 +129,20 @@ def sendCmd(num, level)
 def refresh()
 {
     log.debug "Refreshing.."
-    poll()
+
 }
 
 def poll()
 {
-    getStatus()
+    log.debug "Polling.."
+}
 
-    def polltimer = getPollTimer().toInteger()
-
-    if(polltimer != 0){
-    	log.debug "Polling.."
-
-        def randomness = Math.abs(new Random().nextInt()) % 60 + 10
-        log.debug "Random: $randomness"
-
-        runIn((60*polltimer)+randomness, refresh)
-    } else {
-    	//do nothing
-        //log.debug "Polling disabled"
-    }
+def ping()
+{
+    log.debug "Pinging.."
+    //poll()
 }
 
 def initialize(){
-    poll()
-}
-
-def getStatus() {
-
-    def userpasstext = "$settings.username:$settings.password"
-    def userpass = userpasstext.encodeAsBase64().toString()
-
-    sendHubCommand(new physicalgraph.device.HubAction("""GET 3?0262${settings.deviceid}0F1900=I=3 HTTP/1.1\r\nHOST: ${settings.host}:${settings.port}\r\nAuthorization: Basic ${userpass}\r\n\r\n""", physicalgraph.device.Protocol.LAN, "${deviceNetworkId}"))
-
-    def buffer_status = runIn(2, getBufferStatus)
-}
-
-def getBufferStatus() {
-	def buffer = ""
-
-    def userpasstext = "$settings.username:$settings.password"
-    def userpass = userpasstext.encodeAsBase64().toString()
-
-    sendHubCommand(new physicalgraph.device.HubAction("""GET /buffstatus.xml HTTP/1.1\r\nHOST: ${settings.host}:${settings.port}\r\nAuthorization: Basic ${userpass}\r\n\r\n""", physicalgraph.device.Protocol.LAN, "${deviceNetworkId}", [callback:parseBuffer]))
-}
-
-def parseBuffer(response){
-	def buffer = ""
-
-    def body = new XmlSlurper().parseText("$response.body")
-    buffer = body.BS.toString()
-
-    log.debug "Buffer: ${buffer}"
-
-    def buffer_end = buffer.substring(buffer.length()-2,buffer.length())
-	def buffer_end_int = Integer.parseInt(buffer_end, 16)
-
-    def parsed_buffer = buffer.substring(0,buffer_end_int)
-    log.debug "ParsedBuffer: ${parsed_buffer}"
-
-    def responseID = parsed_buffer.substring(22,28)
-
-    if (responseID == settings.deviceid) {
-        log.debug "Response is for correct device: ${responseID}"
-        def status = parsed_buffer.substring(38,40)
-        log.debug "Status: ${status}"
-
-        def level = Math.round(Integer.parseInt(status, 16)*(100/255))
-        log.debug "Level: ${level}"
-
-        if (level == 0) {
-            log.debug "Device is off..."
-            sendEvent(name: "switch", value: "off")
-            sendEvent(name: "level", value: level, unit: "%")
-            }
-
-        else if (level > 0) {
-            log.debug "Device is on..."
-            sendEvent(name: "switch", value: "on")
-            sendEvent(name: "level", value: level, unit: "%")
-        }
-    } else {
-    	log.debug "Response is for wrong device - trying again"
-        getStatus()
-    }
-}
-
-def getPollTimer(){
-    if (settings.poll_frequency == null) {
-    	settings.poll_frequency = 3
-    }
-
-    def polltimer = settings.poll_frequency as Integer
-	return polltimer
+    //poll()
 }
